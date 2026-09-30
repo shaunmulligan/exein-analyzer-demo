@@ -1,0 +1,8 @@
+name: exein-ha-demo
+type: sw.application
+version: 0.1.0
+description: Home Assistant kiosk on a Raspberry Pi 5, gated by Exein Analyzer CVE scans.
+data:
+  defaultDeviceType: raspberrypi5
+  supportedDeviceTypes:
+    - raspberrypi5

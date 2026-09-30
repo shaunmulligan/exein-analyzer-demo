@@ -1,0 +1,121 @@
+name: Build, scan, deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      enforce:
+        description: Cancel the deploy on high or critical CVEs
+        type: boolean
+        default: true
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  BALENA_CLI_VERSION: v25.2.6
+  PROJECT_NAME: demo
+  DEVICE_TYPE: raspberrypi5
+  ARCH: aarch64
+  RESULTS_DIR: exein-results
+  ANALYZER_URL: https://analyzer.exein.io/api/
+  ANALYZER_CLI_VERSION: latest
+
+jobs:
+  build-scan-deploy:
+    # One job: balena deploy pushes the images that balena build built or pulled into this runner's Docker.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install balena CLI
+        env:
+          BALENA_TOKEN: ${{ secrets.BALENA_TOKEN }}
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/balena-cli.tar.gz" \
+            "https://github.com/balena-io/balena-cli/releases/download/${BALENA_CLI_VERSION}/balena-cli-${BALENA_CLI_VERSION}-linux-arm64-standalone.tar.gz"
+          tar xzf "$RUNNER_TEMP/balena-cli.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/balena/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/balena/bin/balena" login --token "$BALENA_TOKEN"
+
+      - name: balena build
+        run: |
+          balena build --deviceType "$DEVICE_TYPE" --arch "$ARCH" \
+            --projectName "$PROJECT_NAME" --tag "$GITHUB_SHA"
+
+      - name: Export images
+        run: |
+          # balena build tags build: services as <project>_<service>:<tag>; image: services keep their reference.
+          docker save "${PROJECT_NAME}_homeassistant:${GITHUB_SHA}" -o "$RUNNER_TEMP/homeassistant.tar"
+          browser_image="$(docker compose config --format json | jq -r '.services.browser.image')"
+          docker save "$browser_image" -o "$RUNNER_TEMP/browser.tar"
+
+      - name: Exein scan homeassistant
+        id: scan_homeassistant
+        uses: exein-io/analyzer-scan@9740fd94d6e05307d2c7b303155164ca9aab2e3d # v1.0.1
+        with:
+          api-key: ${{ secrets.ANALYZER_API_KEY }}
+          object-id: ${{ vars.EXEIN_OBJECT_HA }}
+          scan-type: docker
+          file-path: ${{ runner.temp }}/homeassistant.tar
+
+      - name: Exein scan browser
+        id: scan_browser
+        uses: exein-io/analyzer-scan@9740fd94d6e05307d2c7b303155164ca9aab2e3d # v1.0.1
+        with:
+          api-key: ${{ secrets.ANALYZER_API_KEY }}
+          object-id: ${{ vars.EXEIN_OBJECT_BROWSER }}
+          scan-type: docker
+          file-path: ${{ runner.temp }}/browser.tar
+
+      - name: Wait for scans and fetch results
+        env:
+          ANALYZER_API_KEY: ${{ secrets.ANALYZER_API_KEY }}
+          HA_SCAN_ID: ${{ steps.scan_homeassistant.outputs.scan-id }}
+          BROWSER_SCAN_ID: ${{ steps.scan_browser.outputs.scan-id }}
+          HA_SCAN_URL: ${{ steps.scan_homeassistant.outputs.scan-url }}
+          BROWSER_SCAN_URL: ${{ steps.scan_browser.outputs.scan-url }}
+        run: |
+          # Same download analyzer-scan uses; its install path is not an output.
+          mkdir -p "$RUNNER_TEMP/analyzer-cli"
+          curl -fsSL -H "Authorization: Bearer $ANALYZER_API_KEY" \
+            "${ANALYZER_URL%/}/releases/analyzer-cli/${ANALYZER_CLI_VERSION}/analyzer-aarch64-unknown-linux-gnu.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP/analyzer-cli"
+          export PATH="$RUNNER_TEMP/analyzer-cli:$PATH"
+          {
+            echo "### Exein scans"
+            echo "- homeassistant: $HA_SCAN_URL"
+            echo "- browser: $BROWSER_SCAN_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
+          scripts/exein-fetch.sh "homeassistant=$HA_SCAN_ID" "browser=$BROWSER_SCAN_ID"
+
+      - name: CVE gate
+        env:
+          ENFORCE: ${{ github.event_name != 'workflow_dispatch' || inputs.enforce }}
+        run: scripts/exein-gate.sh "$RESULTS_DIR"/*-vex.json
+
+      - name: Upload scan results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: exein-results
+          path: ${{ env.RESULTS_DIR }}
+          if-no-files-found: ignore
+
+      - name: balena deploy
+        env:
+          BALENA_FLEET: ${{ vars.BALENA_FLEET }}
+          HA_SCAN_ID: ${{ steps.scan_homeassistant.outputs.scan-id }}
+          BROWSER_SCAN_ID: ${{ steps.scan_browser.outputs.scan-id }}
+        run: |
+          balena deploy "$BALENA_FLEET" --projectName "$PROJECT_NAME" --tag "$GITHUB_SHA" \
+            --release-tag \
+              exein-scan-homeassistant "$HA_SCAN_ID" \
+              exein-scan-browser "$BROWSER_SCAN_ID" \
+              commit "$GITHUB_SHA"

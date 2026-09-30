@@ -1,0 +1,26 @@
+homeassistant:
+  name: Exein Demo Home
+  unit_system: metric
+  time_zone: Europe/London
+  auth_providers:
+    # The kiosk browser runs on the same host network, so it logs in without a password.
+    - type: trusted_networks
+      trusted_networks:
+        - 127.0.0.1
+        - "::1"
+      allow_bypass_login: true
+    - type: homeassistant
+
+default_config:
+
+# Fake lights, climate, media players and sensors. No hardware needed.
+demo:
+
+lovelace:
+  dashboards:
+    exein-demo:
+      mode: yaml
+      filename: dashboards/exein-demo.yaml
+      title: Exein Demo
+      icon: mdi:shield-home
+      show_in_sidebar: true
