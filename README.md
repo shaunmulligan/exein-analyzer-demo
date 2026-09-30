@@ -8,8 +8,9 @@ reaches the fleet:
 balena build  ->  docker save  ->  Exein scan  ->  CVE gate  ->  balena deploy
 ```
 
-`balena deploy` pushes the images that `balena build` made on the same
-runner. The images Exein scans are the images that ship.
+The workflow saves each image as a tarball. Exein scans the tarball, and the
+deploy job loads that same tarball. The images Exein scans are the images
+that ship.
 
 ## What runs on the device
 
@@ -21,21 +22,35 @@ runner. The images Exein scans are the images that ship.
 `balena build` builds `homeassistant` and pulls `browser`. `balena deploy`
 then pushes both local images without a second pull.
 
+Add a service to `docker-compose.yml` and the workflow scans it too. There is
+no service list to keep in the workflow.
+
 ## The gate
 
 The [`exein-io/analyzer-scan`](https://github.com/exein-io/analyzer-scan)
 action uploads each image and returns a scan ID. It does not gate on results.
-This repo adds the gate:
+The workflow has three jobs:
+
+1. `build` runs `balena build`, then saves one tarball per compose service
+   (`scripts/compose-images.sh`).
+2. `scan` runs once per service. It finds or creates the Analyzer object
+   `<repo>-<service>` (`scripts/exein-object.sh`), scans the tarball with
+   the action, and gates on the result.
+3. `deploy` runs only when every scan passes. It loads the tarballs and runs
+   `balena deploy`.
+
+The gate in each `scan` job:
 
 1. `scripts/exein-fetch.sh` waits for each scan, then downloads the PDF report
    and the VEX document (CycloneDX with `vulnerabilities[]`).
 2. `scripts/exein-gate.sh` counts CVEs with a high or critical rating.
    It skips CVEs that Exein marks `not_affected`, `false_positive`, or
    `resolved`.
-3. If the count is not zero, the job fails and `balena deploy` does not run.
+3. If the count is not zero, that `scan` job fails and `deploy` does not run.
+   The other services still finish their scans.
 
-The job summary lists the counts per service and links to each scan.
-The report and VEX files are workflow artifacts.
+Each `scan` job summary shows the counts and links to the scan.
+The report and VEX files are workflow artifacts (`exein-<service>`).
 
 Push to `main` always enforces the gate. A manual run
 (**Actions → Build, scan, deploy → Run workflow**) has an `enforce` checkbox.
@@ -44,31 +59,25 @@ Clear it to deploy regardless and show the warning path.
 ## Setup
 
 1. Create a balenaCloud fleet for `raspberrypi5`.
-2. Create one Analyzer object per service and note the IDs:
-
-   ```sh
-   analyzer object new exein-demo-homeassistant
-   analyzer object new exein-demo-browser
-   ```
-
-3. In the GitHub repo settings, add:
+2. In the GitHub repo settings, add:
 
    | Kind | Name | Value |
    |---|---|---|
    | Secret | `ANALYZER_API_KEY` | Exein Analyzer API key |
    | Secret | `BALENA_TOKEN` | balenaCloud API key |
    | Variable | `BALENA_FLEET` | Fleet slug, for example `myorg/exein-ha-demo` |
-   | Variable | `EXEIN_OBJECT_HA` | Object ID for `homeassistant` |
-   | Variable | `EXEIN_OBJECT_BROWSER` | Object ID for `browser` |
 
-4. Run the workflow with `enforce` cleared for the first release.
-5. Complete the Home Assistant onboarding once from a laptop at
+   You do not create Analyzer objects. Each `scan` job finds the object
+   `<repo>-<service>` by name, for example
+   `exein-analyzer-demo-homeassistant`, and creates it if it does not exist.
+
+3. Run the workflow with `enforce` cleared for the first release.
+4. Complete the Home Assistant onboarding once from a laptop at
    `http://<device-ip>:8123`. The `ha-storage` volume keeps the user.
    After that, the kiosk logs in with no password through `trusted_networks`
    (127.0.0.1 only).
 
 The workflow runs on `ubuntu-24.04-arm`, so it builds natively with no QEMU.
-Arm runners are free for public repos only.
 
 ## Demo script
 

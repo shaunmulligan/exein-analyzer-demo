@@ -23,32 +23,38 @@ env:
   DEVICE_TYPE: raspberrypi5
   ARCH: aarch64
   RESULTS_DIR: exein-results
+  IMAGES_DIR: images
   ANALYZER_URL: https://analyzer.exein.io/api/
   ANALYZER_CLI_VERSION: latest
 
 jobs:
-  build-scan-deploy:
-    # One job: balena deploy pushes the images that balena build built or pulled into this runner's Docker.
+  build:
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 90
+    timeout-minutes: 30
+    outputs:
+      services: ${{ steps.images.outputs.services }}
     steps:
+      - name: Check repo secrets and variables
+        env:
+          ANALYZER_API_KEY: ${{ secrets.ANALYZER_API_KEY }}
+          BALENA_TOKEN: ${{ secrets.BALENA_TOKEN }}
+          BALENA_FLEET: ${{ vars.BALENA_FLEET }}
+        run: |
+          missing=0
+          for name in ANALYZER_API_KEY BALENA_TOKEN BALENA_FLEET; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::${name} is empty or not set. See README Setup."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install balena CLI
-        env:
-          BALENA_TOKEN: ${{ secrets.BALENA_TOKEN }}
-        run: |
-          curl -fsSL -o "$RUNNER_TEMP/balena-cli.tar.gz" \
-            "https://github.com/balena-io/balena-cli/releases/download/${BALENA_CLI_VERSION}/balena-cli-${BALENA_CLI_VERSION}-linux-arm64-standalone.tar.gz"
-          tar xzf "$RUNNER_TEMP/balena-cli.tar.gz" -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/balena/bin" >> "$GITHUB_PATH"
-          if [[ -z "$BALENA_TOKEN" ]]; then
-            echo "::error::BALENA_TOKEN secret is empty or not set."
-            exit 1
-          fi
-          # An empty token makes login prompt and exit 0, so confirm the session.
-          "$RUNNER_TEMP/balena/bin/balena" login --token "$BALENA_TOKEN"
-          "$RUNNER_TEMP/balena/bin/balena" whoami
+      - uses: ./.github/actions/setup-balena
+        with:
+          token: ${{ secrets.BALENA_TOKEN }}
+          version: ${{ env.BALENA_CLI_VERSION }}
 
       - name: balena build
         run: |
@@ -56,72 +62,126 @@ jobs:
             --projectName "$PROJECT_NAME" --tag "$GITHUB_SHA"
 
       - name: Export images
+        id: images
         run: |
-          # balena build tags build: services as <project>_<service>:<tag>; image: services keep their reference.
-          docker save "${PROJECT_NAME}_homeassistant:${GITHUB_SHA}" -o "$RUNNER_TEMP/homeassistant.tar"
-          browser_image="$(docker compose config --format json | jq -r '.services.browser.image')"
-          docker save "$browser_image" -o "$RUNNER_TEMP/browser.tar"
+          images="$(scripts/compose-images.sh "$PROJECT_NAME" "$GITHUB_SHA")"
+          mkdir -p "$IMAGES_DIR"
+          jq -r '.[] | "\(.name) \(.image)"' <<<"$images" | while read -r name image; do
+            docker save "$image" -o "${IMAGES_DIR}/${name}.tar"
+          done
+          echo "services=$(jq -c '[.[].name]' <<<"$images")" >> "$GITHUB_OUTPUT"
 
-      - name: Exein scan homeassistant
-        id: scan_homeassistant
-        uses: exein-io/analyzer-scan@9740fd94d6e05307d2c7b303155164ca9aab2e3d # v1.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: images
+          path: ${{ env.IMAGES_DIR }}
+          # Image layers are already compressed.
+          compression-level: 0
+          retention-days: 1
+
+  scan:
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    strategy:
+      # Scan every service even when one fails the gate.
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.build.outputs.services) }}
+    env:
+      ANALYZER_API_KEY: ${{ secrets.ANALYZER_API_KEY }}
+      SERVICE: ${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: images
+          path: ${{ env.IMAGES_DIR }}
+
+      - uses: ./.github/actions/setup-analyzer
         with:
           api-key: ${{ secrets.ANALYZER_API_KEY }}
-          object-id: ${{ vars.EXEIN_OBJECT_HA }}
-          scan-type: docker
-          file-path: ${{ runner.temp }}/homeassistant.tar
+          api-url: ${{ env.ANALYZER_URL }}
+          version: ${{ env.ANALYZER_CLI_VERSION }}
 
-      - name: Exein scan browser
-        id: scan_browser
-        uses: exein-io/analyzer-scan@9740fd94d6e05307d2c7b303155164ca9aab2e3d # v1.0.1
-        with:
-          api-key: ${{ secrets.ANALYZER_API_KEY }}
-          object-id: ${{ vars.EXEIN_OBJECT_BROWSER }}
-          scan-type: docker
-          file-path: ${{ runner.temp }}/browser.tar
-
-      - name: Wait for scans and fetch results
+      - name: Resolve Exein object
+        id: object
         env:
-          ANALYZER_API_KEY: ${{ secrets.ANALYZER_API_KEY }}
-          HA_SCAN_ID: ${{ steps.scan_homeassistant.outputs.scan-id }}
-          BROWSER_SCAN_ID: ${{ steps.scan_browser.outputs.scan-id }}
-          HA_SCAN_URL: ${{ steps.scan_homeassistant.outputs.scan-url }}
-          BROWSER_SCAN_URL: ${{ steps.scan_browser.outputs.scan-url }}
+          # Objects are named <repo>-<service> and created on first scan.
+          OBJECT_NAME: ${{ github.event.repository.name }}-${{ matrix.service }}
         run: |
-          # Same download analyzer-scan uses; its install path is not an output.
-          mkdir -p "$RUNNER_TEMP/analyzer-cli"
-          curl -fsSL -H "Authorization: Bearer $ANALYZER_API_KEY" \
-            "${ANALYZER_URL%/}/releases/analyzer-cli/${ANALYZER_CLI_VERSION}/analyzer-aarch64-unknown-linux-gnu.tar.gz" \
-            | tar xz -C "$RUNNER_TEMP/analyzer-cli"
-          export PATH="$RUNNER_TEMP/analyzer-cli:$PATH"
-          {
-            echo "### Exein scans"
-            echo "- homeassistant: $HA_SCAN_URL"
-            echo "- browser: $BROWSER_SCAN_URL"
-          } >> "$GITHUB_STEP_SUMMARY"
-          scripts/exein-fetch.sh "homeassistant=$HA_SCAN_ID" "browser=$BROWSER_SCAN_ID"
+          id="$(scripts/exein-object.sh "$OBJECT_NAME")"
+          echo "id=${id}" >> "$GITHUB_OUTPUT"
+
+      - name: Exein scan
+        id: scan
+        uses: exein-io/analyzer-scan@9740fd94d6e05307d2c7b303155164ca9aab2e3d # v1.0.1
+        with:
+          api-key: ${{ secrets.ANALYZER_API_KEY }}
+          api-url: ${{ env.ANALYZER_URL }}
+          object-id: ${{ steps.object.outputs.id }}
+          scan-type: docker
+          file-path: ${{ env.IMAGES_DIR }}/${{ matrix.service }}.tar
+
+      - name: Wait for scan and fetch results
+        env:
+          SCAN_ID: ${{ steps.scan.outputs.scan-id }}
+          SCAN_URL: ${{ steps.scan.outputs.scan-url }}
+        run: |
+          echo "Exein scan for **${SERVICE}**: ${SCAN_URL}" >> "$GITHUB_STEP_SUMMARY"
+          scripts/exein-fetch.sh "${SERVICE}=${SCAN_ID}"
+          jq -n --arg service "$SERVICE" --arg id "$SCAN_ID" '{service: $service, scan_id: $id}' \
+            > "${RESULTS_DIR}/${SERVICE}-scan.json"
 
       - name: CVE gate
         env:
           ENFORCE: ${{ github.event_name != 'workflow_dispatch' || inputs.enforce }}
-        run: scripts/exein-gate.sh "$RESULTS_DIR"/*-vex.json
+        run: scripts/exein-gate.sh "${RESULTS_DIR}/${SERVICE}-vex.json"
 
       - name: Upload scan results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: exein-results
+          name: exein-${{ matrix.service }}
           path: ${{ env.RESULTS_DIR }}
           if-no-files-found: ignore
+
+  deploy:
+    # Runs only when every scan leg passed the gate.
+    needs: scan
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/setup-balena
+        with:
+          token: ${{ secrets.BALENA_TOKEN }}
+          version: ${{ env.BALENA_CLI_VERSION }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: images
+          path: ${{ env.IMAGES_DIR }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: exein-*
+          path: ${{ env.RESULTS_DIR }}
+          merge-multiple: true
+
+      - name: Load scanned images
+        run: |
+          # The exact tarballs Exein scanned; balena deploy finds them by tag and skips the build.
+          for tar in "$IMAGES_DIR"/*.tar; do
+            docker load -i "$tar"
+          done
 
       - name: balena deploy
         env:
           BALENA_FLEET: ${{ vars.BALENA_FLEET }}
-          HA_SCAN_ID: ${{ steps.scan_homeassistant.outputs.scan-id }}
-          BROWSER_SCAN_ID: ${{ steps.scan_browser.outputs.scan-id }}
         run: |
+          mapfile -t scan_tags < <(jq -r '"exein-scan-\(.service)", .scan_id' "$RESULTS_DIR"/*-scan.json)
           balena deploy "$BALENA_FLEET" --projectName "$PROJECT_NAME" --tag "$GITHUB_SHA" \
-            --release-tag \
-              exein-scan-homeassistant "$HA_SCAN_ID" \
-              exein-scan-browser "$BROWSER_SCAN_ID" \
-              commit "$GITHUB_SHA"
+            --release-tag "${scan_tags[@]}" commit "$GITHUB_SHA"
