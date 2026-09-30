@@ -16,7 +16,7 @@ runner. The images Exein scans are the images that ship.
 | Service | Image | Role |
 |---|---|---|
 | `homeassistant` | `ghcr.io/home-assistant/home-assistant:2026.9.4` (digest-pinned) | HA with the `demo` integration and a YAML dashboard |
-| `browser` | `bh.cr/balenalabs/browser-aarch64/2.12.2` | Chromium kiosk that shows the dashboard |
+| `browser` | `bh.cr/balenalabs/browser-aarch64/2.12.0` | Chromium kiosk that shows the dashboard |
 
 `balena build` builds `homeassistant` and pulls `browser`. `balena deploy`
 then pushes both local images without a second pull.
