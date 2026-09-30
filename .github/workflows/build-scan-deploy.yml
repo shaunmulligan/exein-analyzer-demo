@@ -42,7 +42,13 @@ jobs:
             "https://github.com/balena-io/balena-cli/releases/download/${BALENA_CLI_VERSION}/balena-cli-${BALENA_CLI_VERSION}-linux-arm64-standalone.tar.gz"
           tar xzf "$RUNNER_TEMP/balena-cli.tar.gz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/balena/bin" >> "$GITHUB_PATH"
+          if [[ -z "$BALENA_TOKEN" ]]; then
+            echo "::error::BALENA_TOKEN secret is empty or not set."
+            exit 1
+          fi
+          # An empty token makes login prompt and exit 0, so confirm the session.
           "$RUNNER_TEMP/balena/bin/balena" login --token "$BALENA_TOKEN"
+          "$RUNNER_TEMP/balena/bin/balena" whoami
 
       - name: balena build
         run: |
