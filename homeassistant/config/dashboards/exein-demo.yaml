@@ -1,0 +1,70 @@
+title: Exein Demo Home
+views:
+  - title: Home
+    path: home
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Outside
+          - type: weather-forecast
+            entity: weather.demo_weather_south
+            forecast_type: daily
+            grid_options:
+              columns: full
+          - type: tile
+            entity: sensor.outside_temperature
+          - type: tile
+            entity: sensor.outside_humidity
+          - type: history-graph
+            hours_to_show: 12
+            entities:
+              - sensor.outside_temperature
+            grid_options:
+              columns: full
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Lights
+          - type: tile
+            entity: light.bed_light
+            features:
+              - type: light-brightness
+          - type: tile
+            entity: light.ceiling_lights
+            features:
+              - type: light-brightness
+          - type: tile
+            entity: light.kitchen_lights
+          - type: tile
+            entity: light.living_room_rgbww_lights
+          - type: tile
+            entity: switch.decorative_lights
+          - type: heading
+            heading: Security
+          - type: tile
+            entity: lock.front_door
+          - type: tile
+            entity: lock.kitchen_door
+          - type: tile
+            entity: cover.garage_door
+          - type: tile
+            entity: cover.kitchen_window
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Climate
+          - type: thermostat
+            entity: climate.ecobee
+            grid_options:
+              columns: full
+          - type: heading
+            heading: Media
+          - type: media-control
+            entity: media_player.living_room
+            grid_options:
+              columns: full

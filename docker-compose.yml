@@ -1,0 +1,27 @@
+version: "2.1"
+
+volumes:
+  ha-storage:
+  browser-settings:
+
+services:
+  homeassistant:
+    build: ./homeassistant
+    network_mode: host
+    restart: always
+    volumes:
+      # Only .storage persists (users, onboarding). Config ships in the image.
+      - ha-storage:/config/.storage
+
+  browser:
+    image: bh.cr/balenalabs/browser-aarch64/2.12.2
+    network_mode: host
+    privileged: true
+    restart: always
+    depends_on:
+      - homeassistant
+    volumes:
+      - browser-settings:/data
+    environment:
+      LAUNCH_URL: http://localhost:8123/exein-demo/home
+      KIOSK: "1"
