@@ -17,10 +17,20 @@ that ship.
 | Service | Image | Role |
 |---|---|---|
 | `homeassistant` | `ghcr.io/home-assistant/home-assistant:2026.9.4` (digest-pinned) | HA with the `demo` integration and a YAML dashboard |
-| `browser` | `bh.cr/balenalabs/browser-aarch64/2.12.0` | Chromium kiosk that shows the dashboard |
+| `display` | `bh.cr/balenasolutions/display-<arch>/0.3.1` | Weston Wayland compositor |
+| `browser` | built from source: the `browser` submodule, pinned to [balenasolutions/browser#207](https://github.com/balenasolutions/browser/pull/207) | Chromium kiosk (browser block v3, Wayland) that shows the dashboard |
 
-`browser/Dockerfile.template` picks the block for the fleet's arch with
-`%%BALENA_ARCH%%`, so one compose file builds for the Pi 5 and x86 fleets.
+The browser block v3 renders as a Wayland client through the display block.
+The two share the Wayland socket through the `display-socket` volume at `/run`.
+v3 images are not published yet, so the pipeline builds the browser from the
+submodule (`submodules: "true"` in `build-scan-deploy.yml`). Exein scans the
+image built from that exact commit.
+
+To clone this repo with the browser source:
+
+```sh
+git clone --recurse-submodules https://github.com/shaunmulligan/exein-analyzer-demo.git
+```
 
 ## Fleets
 

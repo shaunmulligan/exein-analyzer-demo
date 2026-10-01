@@ -16,6 +16,8 @@ jobs:
       fleets: |
         shaun_mulligan/exein_analyzer_demo
         shaun_mulligan/exein_analyzer_demo_x86
+      # browser/ is a submodule: browser block v3 built from source.
+      submodules: "true"
     secrets:
       balena-token: ${{ secrets.BALENA_TOKEN }}
       analyzer-api-key: ${{ secrets.ANALYZER_API_KEY }}
