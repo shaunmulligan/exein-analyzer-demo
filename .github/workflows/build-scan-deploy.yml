@@ -1,14 +1,10 @@
-name: Build, scan, deploy
+name: Build, scan, deploy draft
 
+# Deploys a draft release. exein-gate.yml finalizes it when its scans pass.
 on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      enforce:
-        description: Cancel the deploy on high or critical CVEs
-        type: boolean
-        default: true
 
 concurrency:
   group: deploy
@@ -82,10 +78,8 @@ jobs:
   scan:
     needs: build
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 45
+    timeout-minutes: 30
     strategy:
-      # Scan every service even when one fails the gate.
-      fail-fast: false
       matrix:
         service: ${{ fromJSON(needs.build.outputs.services) }}
     env:
@@ -124,31 +118,23 @@ jobs:
           scan-type: docker
           file-path: ${{ env.IMAGES_DIR }}/${{ matrix.service }}.tar
 
-      - name: Wait for scan and fetch results
+      - name: Record scan
         env:
           SCAN_ID: ${{ steps.scan.outputs.scan-id }}
           SCAN_URL: ${{ steps.scan.outputs.scan-url }}
         run: |
           echo "Exein scan for **${SERVICE}**: ${SCAN_URL}" >> "$GITHUB_STEP_SUMMARY"
-          scripts/exein-fetch.sh "${SERVICE}=${SCAN_ID}"
+          mkdir -p "$RESULTS_DIR"
           jq -n --arg service "$SERVICE" --arg id "$SCAN_ID" '{service: $service, scan_id: $id}' \
             > "${RESULTS_DIR}/${SERVICE}-scan.json"
 
-      - name: CVE gate
-        env:
-          ENFORCE: ${{ github.event_name != 'workflow_dispatch' || inputs.enforce }}
-        run: scripts/exein-gate.sh "${RESULTS_DIR}/${SERVICE}-vex.json"
-
-      - name: Upload scan results
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: exein-${{ matrix.service }}
           path: ${{ env.RESULTS_DIR }}
-          if-no-files-found: ignore
 
   deploy:
-    # Runs only when every scan leg passed the gate.
+    # Runs once every image is uploaded to Exein. Scans finish later; exein-gate.yml gates the draft.
     needs: scan
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
@@ -178,10 +164,10 @@ jobs:
             docker load -i "$tar"
           done
 
-      - name: balena deploy
+      - name: balena deploy --draft
         env:
           BALENA_FLEET: ${{ vars.BALENA_FLEET }}
         run: |
           mapfile -t scan_tags < <(jq -r '"exein-scan-\(.service)", .scan_id' "$RESULTS_DIR"/*-scan.json)
-          balena deploy "$BALENA_FLEET" --projectName "$PROJECT_NAME" --tag "$GITHUB_SHA" \
-            --release-tag "${scan_tags[@]}" commit "$GITHUB_SHA"
+          balena deploy "$BALENA_FLEET" --projectName "$PROJECT_NAME" --tag "$GITHUB_SHA" --draft \
+            --release-tag "${scan_tags[@]}" exein-gate pending commit "$GITHUB_SHA"
