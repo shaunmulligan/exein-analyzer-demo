@@ -16,10 +16,11 @@ permissions:
 
 jobs:
   gate:
-    uses: ./.github/workflows/gate.yml
+    uses: shaunmulligan/balena-exein/.github/workflows/gate.yml@main
     with:
-      fleet: ${{ vars.BALENA_FLEET }}
-      fail-on: critical
+      fleets: |
+        PI5_FLEET_SLUG
+        X86_FLEET_SLUG
       enforce: ${{ github.event_name != 'workflow_dispatch' || inputs.enforce }}
     secrets:
       balena-token: ${{ secrets.BALENA_TOKEN }}
