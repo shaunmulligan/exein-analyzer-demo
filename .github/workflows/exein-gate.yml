@@ -1,0 +1,59 @@
+name: Exein gate
+
+# Finalizes draft releases from build-scan-deploy.yml once their Exein scans pass.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      enforce:
+        description: Keep failing drafts unfinalized (clear to finalize them as override)
+        type: boolean
+        default: true
+
+concurrency:
+  group: exein-gate
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  BALENA_CLI_VERSION: v25.2.6
+  RESULTS_DIR: exein-results
+  ANALYZER_URL: https://analyzer.exein.io/api/
+  ANALYZER_CLI_VERSION: latest
+  # Lowest severity that blocks a release: critical or high.
+  FAIL_ON: critical
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/setup-balena
+        with:
+          token: ${{ secrets.BALENA_TOKEN }}
+          version: ${{ env.BALENA_CLI_VERSION }}
+
+      - uses: ./.github/actions/setup-analyzer
+        with:
+          api-key: ${{ secrets.ANALYZER_API_KEY }}
+          api-url: ${{ env.ANALYZER_URL }}
+          version: ${{ env.ANALYZER_CLI_VERSION }}
+
+      - name: Gate draft releases
+        env:
+          ANALYZER_API_KEY: ${{ secrets.ANALYZER_API_KEY }}
+          BALENA_FLEET: ${{ vars.BALENA_FLEET }}
+          ENFORCE: ${{ github.event_name != 'workflow_dispatch' || inputs.enforce }}
+        run: scripts/release-gate.sh "$BALENA_FLEET"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: exein-gate-results
+          path: ${{ env.RESULTS_DIR }}
+          if-no-files-found: ignore
