@@ -14,8 +14,8 @@ jobs:
     with:
       # One app, two device types. Add a fleet here and in exein-gate.yml.
       fleets: |
-        PI5_FLEET_SLUG
-        X86_FLEET_SLUG
+        shaun_mulligan/exein_analyzer_demo
+        shaun_mulligan/exein_analyzer_demo_x86
     secrets:
       balena-token: ${{ secrets.BALENA_TOKEN }}
       analyzer-api-key: ${{ secrets.ANALYZER_API_KEY }}

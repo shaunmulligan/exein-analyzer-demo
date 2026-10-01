@@ -28,7 +28,7 @@ This repo deploys one app to two fleets, listed in both workflow files:
 
 | Fleet | Device | Arch | Build |
 |---|---|---|---|
-| Pi 5 fleet | Raspberry Pi 5 | `aarch64` | native on `ubuntu-24.04-arm` |
+| `exein_analyzer_demo` | Raspberry Pi 5 | `aarch64` | native on `ubuntu-24.04-arm` |
 | `exein_analyzer_demo_x86` | x86 | `amd64` | native on `ubuntu-24.04` |
 
 To add a fleet, add its slug to `fleets` in
@@ -55,8 +55,9 @@ See the balena-exein README for the inputs, tags, and security notes.
 
 1. Create the balenaCloud fleets: `raspberrypi5` and an x86 type such as
    `generic-amd64`.
-2. Put both fleet slugs in `fleets` in the two files in `.github/workflows/`
-   (replace `PI5_FLEET_SLUG` and `X86_FLEET_SLUG`).
+2. Put your fleet slugs in `fleets` in the two files in `.github/workflows/`.
+   This repo uses `shaun_mulligan/exein_analyzer_demo` and
+   `shaun_mulligan/exein_analyzer_demo_x86`.
 3. In the GitHub repo settings, add the secrets `ANALYZER_API_KEY` (Exein
    Analyzer API key) and `BALENA_TOKEN` (balenaCloud API key).
 

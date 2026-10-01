@@ -19,8 +19,8 @@ jobs:
     uses: shaunmulligan/balena-exein/.github/workflows/gate.yml@main
     with:
       fleets: |
-        PI5_FLEET_SLUG
-        X86_FLEET_SLUG
+        shaun_mulligan/exein_analyzer_demo
+        shaun_mulligan/exein_analyzer_demo_x86
       enforce: ${{ github.event_name != 'workflow_dispatch' || inputs.enforce }}
     secrets:
       balena-token: ${{ secrets.BALENA_TOKEN }}
