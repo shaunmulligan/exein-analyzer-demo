@@ -1,173 +1,20 @@
 name: Build, scan, deploy draft
 
-# Deploys a draft release. exein-gate.yml finalizes it when its scans pass.
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-concurrency:
-  group: deploy
-  cancel-in-progress: false
-
 permissions:
   contents: read
 
-env:
-  BALENA_CLI_VERSION: v25.2.6
-  PROJECT_NAME: demo
-  DEVICE_TYPE: raspberrypi5
-  ARCH: aarch64
-  RESULTS_DIR: exein-results
-  IMAGES_DIR: images
-  ANALYZER_URL: https://analyzer.exein.io/api/
-  ANALYZER_CLI_VERSION: latest
-
 jobs:
-  build:
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
-    outputs:
-      services: ${{ steps.images.outputs.services }}
-    steps:
-      - name: Check repo secrets and variables
-        env:
-          ANALYZER_API_KEY: ${{ secrets.ANALYZER_API_KEY }}
-          BALENA_TOKEN: ${{ secrets.BALENA_TOKEN }}
-          BALENA_FLEET: ${{ vars.BALENA_FLEET }}
-        run: |
-          missing=0
-          for name in ANALYZER_API_KEY BALENA_TOKEN BALENA_FLEET; do
-            if [[ -z "${!name}" ]]; then
-              echo "::error::${name} is empty or not set. See README Setup."
-              missing=1
-            fi
-          done
-          exit "$missing"
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: ./.github/actions/setup-balena
-        with:
-          token: ${{ secrets.BALENA_TOKEN }}
-          version: ${{ env.BALENA_CLI_VERSION }}
-
-      - name: balena build
-        run: |
-          balena build --deviceType "$DEVICE_TYPE" --arch "$ARCH" \
-            --projectName "$PROJECT_NAME" --tag "$GITHUB_SHA"
-
-      - name: Export images
-        id: images
-        run: |
-          images="$(scripts/compose-images.sh "$PROJECT_NAME" "$GITHUB_SHA")"
-          mkdir -p "$IMAGES_DIR"
-          jq -r '.[] | "\(.name) \(.image)"' <<<"$images" | while read -r name image; do
-            docker save "$image" -o "${IMAGES_DIR}/${name}.tar"
-          done
-          echo "services=$(jq -c '[.[].name]' <<<"$images")" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: images
-          path: ${{ env.IMAGES_DIR }}
-          # Image layers are already compressed.
-          compression-level: 0
-          retention-days: 1
-
-  scan:
-    needs: build
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
-    strategy:
-      matrix:
-        service: ${{ fromJSON(needs.build.outputs.services) }}
-    env:
-      ANALYZER_API_KEY: ${{ secrets.ANALYZER_API_KEY }}
-      SERVICE: ${{ matrix.service }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: images
-          path: ${{ env.IMAGES_DIR }}
-
-      - uses: ./.github/actions/setup-analyzer
-        with:
-          api-key: ${{ secrets.ANALYZER_API_KEY }}
-          api-url: ${{ env.ANALYZER_URL }}
-          version: ${{ env.ANALYZER_CLI_VERSION }}
-
-      - name: Resolve Exein object
-        id: object
-        env:
-          # Objects are named <repo>-<service> and created on first scan.
-          OBJECT_NAME: ${{ github.event.repository.name }}-${{ matrix.service }}
-        run: |
-          id="$(scripts/exein-object.sh "$OBJECT_NAME")"
-          echo "id=${id}" >> "$GITHUB_OUTPUT"
-
-      - name: Exein scan
-        id: scan
-        uses: exein-io/analyzer-scan@9740fd94d6e05307d2c7b303155164ca9aab2e3d # v1.0.1
-        with:
-          api-key: ${{ secrets.ANALYZER_API_KEY }}
-          api-url: ${{ env.ANALYZER_URL }}
-          object-id: ${{ steps.object.outputs.id }}
-          scan-type: docker
-          file-path: ${{ env.IMAGES_DIR }}/${{ matrix.service }}.tar
-
-      - name: Record scan
-        env:
-          SCAN_ID: ${{ steps.scan.outputs.scan-id }}
-          SCAN_URL: ${{ steps.scan.outputs.scan-url }}
-        run: |
-          echo "Exein scan for **${SERVICE}**: ${SCAN_URL}" >> "$GITHUB_STEP_SUMMARY"
-          mkdir -p "$RESULTS_DIR"
-          jq -n --arg service "$SERVICE" --arg id "$SCAN_ID" '{service: $service, scan_id: $id}' \
-            > "${RESULTS_DIR}/${SERVICE}-scan.json"
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: exein-${{ matrix.service }}
-          path: ${{ env.RESULTS_DIR }}
-
-  deploy:
-    # Runs once every image is uploaded to Exein. Scans finish later; exein-gate.yml gates the draft.
-    needs: scan
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: ./.github/actions/setup-balena
-        with:
-          token: ${{ secrets.BALENA_TOKEN }}
-          version: ${{ env.BALENA_CLI_VERSION }}
-
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: images
-          path: ${{ env.IMAGES_DIR }}
-
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: exein-*
-          path: ${{ env.RESULTS_DIR }}
-          merge-multiple: true
-
-      - name: Load scanned images
-        run: |
-          # The exact tarballs Exein scanned; balena deploy finds them by tag and skips the build.
-          for tar in "$IMAGES_DIR"/*.tar; do
-            docker load -i "$tar"
-          done
-
-      - name: balena deploy --draft
-        env:
-          BALENA_FLEET: ${{ vars.BALENA_FLEET }}
-        run: |
-          mapfile -t scan_tags < <(jq -r '"exein-scan-\(.service)", .scan_id' "$RESULTS_DIR"/*-scan.json)
-          balena deploy "$BALENA_FLEET" --projectName "$PROJECT_NAME" --tag "$GITHUB_SHA" --draft \
-            --release-tag "${scan_tags[@]}" exein-gate pending commit "$GITHUB_SHA"
+  build-scan-draft:
+    uses: ./.github/workflows/build-scan-draft.yml
+    with:
+      fleet: ${{ vars.BALENA_FLEET }}
+      device-type: raspberrypi5
+      arch: aarch64
+    secrets:
+      balena-token: ${{ secrets.BALENA_TOKEN }}
+      analyzer-api-key: ${{ secrets.ANALYZER_API_KEY }}
