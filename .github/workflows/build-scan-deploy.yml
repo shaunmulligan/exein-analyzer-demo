@@ -9,12 +9,13 @@ permissions:
   contents: read
 
 jobs:
-  build-scan-draft:
-    uses: ./.github/workflows/build-scan-draft.yml
+  deploy:
+    uses: shaunmulligan/balena-exein/.github/workflows/build-scan-draft.yml@main
     with:
-      fleet: ${{ vars.BALENA_FLEET }}
-      device-type: raspberrypi5
-      arch: aarch64
+      # One app, two device types. Add a fleet here and in exein-gate.yml.
+      fleets: |
+        PI5_FLEET_SLUG
+        X86_FLEET_SLUG
     secrets:
       balena-token: ${{ secrets.BALENA_TOKEN }}
       analyzer-api-key: ${{ secrets.ANALYZER_API_KEY }}

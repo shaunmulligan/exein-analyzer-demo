@@ -19,96 +19,58 @@ that ship.
 | `homeassistant` | `ghcr.io/home-assistant/home-assistant:2026.9.4` (digest-pinned) | HA with the `demo` integration and a YAML dashboard |
 | `browser` | `bh.cr/balenalabs/browser-aarch64/2.12.0` | Chromium kiosk that shows the dashboard |
 
-`balena build` builds `homeassistant` and pulls `browser`. `balena deploy`
-then pushes both local images without a second pull.
+`browser/Dockerfile.template` picks the block for the fleet's arch with
+`%%BALENA_ARCH%%`, so one compose file builds for the Pi 5 and x86 fleets.
 
-Add a service to `docker-compose.yml` and the workflow scans it too. There is
-no service list to keep in the workflow.
+## Fleets
+
+This repo deploys one app to two fleets, listed in both workflow files:
+
+| Fleet | Device | Arch | Build |
+|---|---|---|---|
+| Pi 5 fleet | Raspberry Pi 5 | `aarch64` | native on `ubuntu-24.04-arm` |
+| `exein_analyzer_demo_x86` | x86 | `amd64` | native on `ubuntu-24.04` |
+
+To add a fleet, add its slug to `fleets` in
+`.github/workflows/build-scan-deploy.yml` and `.github/workflows/exein-gate.yml`.
+
+The single-container Pi 3 (`armv7hf`) example is
+[exein-analyzer-demo-single](https://github.com/shaunmulligan/exein-analyzer-demo-single).
 
 ## How the gate works
 
-Exein CVE analysis can take hours, so the pipeline does not wait for it.
-A balena draft release holds each build until its scans pass. The fleet's
-"track latest" policy ignores drafts, so devices never get an ungated release.
+The pipeline is the [balena-exein](https://github.com/shaunmulligan/balena-exein)
+reusable workflows. This repo only calls them:
 
-`build-scan-deploy.yml` runs on every push to `main`:
+- `build-scan-deploy.yml`, on every push to `main`: builds each fleet, uploads
+  every image to Exein, and deploys a draft release tagged
+  `exein-gate=pending`. Devices ignore drafts.
+- `exein-gate.yml`, about every 15 minutes: when a draft's scans finish, it
+  gates the draft on critical CVEs, attaches the VEX and PDF reports, and
+  finalizes it only on `pass` (or `override`).
 
-1. `build` runs `balena build`, then saves one tarball per compose service
-   (`list-images` action).
-2. `scan` runs once per service. It finds or creates the Analyzer object
-   `<repo>-<service>` (`exein-object` action), then uploads the tarball
-   with [`exein-io/analyzer-scan`](https://github.com/exein-io/analyzer-scan).
-3. `deploy` loads the tarballs and runs `balena deploy --draft`. The release
-   gets the tags `exein-scan-<service>=<scan-id>` and `exein-gate=pending`.
-
-`exein-gate.yml` runs about every 15 minutes, at :07, :22, :37 and :52
-(`release-gate` action):
-
-1. It finds drafts tagged `exein-gate=pending`, oldest first.
-2. If a draft's scans are still running, it stops, so releases finalize in
-   build order.
-3. When the scans finish, it downloads each VEX and PDF report and counts
-   CVEs at or above `FAIL_ON` (default `critical`). It skips CVEs that Exein
-   marks `not_affected`, `false_positive`, or `resolved`.
-4. It attaches the VEX and report files to the release as release assets.
-5. It tags the release with the result:
-
-   | Result | `exein-gate` | Release |
-   |---|---|---|
-   | No blocking CVEs | `pass` | Finalized; devices update |
-   | Blocking CVEs | `fail` | Stays a draft |
-   | Blocking CVEs, `enforce` cleared | `override` | Finalized |
-   | Scan failed in Exein | `error` | Stays a draft |
-
-   `exein-blocking` holds the count, and `exein-fail-on` holds the threshold.
-
-To gate right away, or to show the override path, run **Actions → Exein
-gate → Run workflow**. Clear `enforce` to finalize failing drafts as
-`override`.
-
-## Layout
-
-The two workflows in this repo are thin callers. The logic is in two reusable
-workflows and five composite actions, so other repos can call them later.
-
-| Path | Role |
-|---|---|
-| `.github/workflows/build-scan-deploy.yml` | Caller: on push to `main` |
-| `.github/workflows/exein-gate.yml` | Caller: schedule and manual run |
-| `.github/workflows/build-scan-draft.yml` | Reusable: build, scan, draft deploy |
-| `.github/workflows/gate.yml` | Reusable: gate and finalize drafts |
-| `.github/actions/setup-balena` | Install the balena CLI and log in |
-| `.github/actions/setup-analyzer` | Install the Analyzer CLI |
-| `.github/actions/list-images` | Map compose services to local image names |
-| `.github/actions/exein-object` | Find or create the Exein object |
-| `.github/actions/release-gate` | Gate drafts (`release-gate.sh`, `exein-fetch.sh`, `exein-gate.sh`) |
-
-Each script sits in the action that runs it, and the action finds it through
-`GITHUB_ACTION_PATH`.
+See the balena-exein README for the inputs, tags, and security notes.
 
 ## Setup
 
-1. Create a balenaCloud fleet for `raspberrypi5`.
-2. In the GitHub repo settings, add:
+1. Create the balenaCloud fleets: `raspberrypi5` and an x86 type such as
+   `generic-amd64`.
+2. Put both fleet slugs in `fleets` in the two files in `.github/workflows/`
+   (replace `PI5_FLEET_SLUG` and `X86_FLEET_SLUG`).
+3. In the GitHub repo settings, add the secrets `ANALYZER_API_KEY` (Exein
+   Analyzer API key) and `BALENA_TOKEN` (balenaCloud API key).
 
-   | Kind | Name | Value |
-   |---|---|---|
-   | Secret | `ANALYZER_API_KEY` | Exein Analyzer API key |
-   | Secret | `BALENA_TOKEN` | balenaCloud API key |
-   | Variable | `BALENA_FLEET` | Fleet slug, for example `myorg/exein-ha-demo` |
+   You do not create Analyzer objects. The pipeline finds the object
+   `<fleet-name>-<service>`, for example
+   `exein_analyzer_demo_x86-homeassistant`, and creates it if it does not
+   exist.
 
-   You do not create Analyzer objects. Each `scan` job finds the object
-   `<repo>-<service>` by name, for example
-   `exein-analyzer-demo-homeassistant`, and creates it if it does not exist.
-
-3. Push to `main`. When the scans finish, run **Exein gate** with `enforce`
+4. Push to `main`. When the scans finish, run **Exein gate** with `enforce`
    cleared to finalize the first release.
-4. Complete the Home Assistant onboarding once from a laptop at
+5. Complete the Home Assistant onboarding once from a laptop at
    `http://<device-ip>:8123`. The `ha-storage` volume keeps the user.
    After that, the kiosk logs in with no password through `trusted_networks`
    (127.0.0.1 only).
-
-The workflow runs on `ubuntu-24.04-arm`, so it builds natively with no QEMU.
 
 ## Demo script
 
@@ -123,15 +85,6 @@ Scans take hours, so push before the demo.
    dashboard.
 4. Run **Exein gate** with `enforce` cleared. The release finalizes as
    `override`, and the Pi updates.
-
-## Test the gate locally
-
-```sh
-test/gate-test.sh
-```
-
-The test runs the gate against fixture VEX files. It checks the pass and
-block cases for both `FAIL_ON` levels.
 
 ## Known limits
 
