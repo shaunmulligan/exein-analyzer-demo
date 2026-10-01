@@ -3,7 +3,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-gate=../scripts/exein-gate.sh
+gate=../.github/actions/release-gate/exein-gate.sh
 fixtures=fixtures
 failures=0
 

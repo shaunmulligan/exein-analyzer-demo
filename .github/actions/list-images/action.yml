@@ -1,0 +1,31 @@
+name: List balena images
+description: List each compose service and the local image name that balena build gives it.
+
+inputs:
+  project-name:
+    description: Project name passed to balena build --projectName
+    required: true
+  tag:
+    description: Tag passed to balena build --tag
+    required: true
+
+outputs:
+  images:
+    description: 'JSON array of {name, image}'
+    value: ${{ steps.list.outputs.images }}
+  services:
+    description: JSON array of service names
+    value: ${{ steps.list.outputs.services }}
+
+runs:
+  using: composite
+  steps:
+    - id: list
+      shell: bash
+      env:
+        PROJECT_NAME: ${{ inputs.project-name }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        images="$("$GITHUB_ACTION_PATH/compose-images.sh" "$PROJECT_NAME" "$TAG")"
+        echo "images=${images}" >> "$GITHUB_OUTPUT"
+        echo "services=$(jq -c '[.[].name]' <<<"$images")" >> "$GITHUB_OUTPUT"

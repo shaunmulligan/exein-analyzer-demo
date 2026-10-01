@@ -34,23 +34,22 @@ A balena draft release holds each build until its scans pass. The fleet's
 `build-scan-deploy.yml` runs on every push to `main`:
 
 1. `build` runs `balena build`, then saves one tarball per compose service
-   (`scripts/compose-images.sh`).
+   (`list-images` action).
 2. `scan` runs once per service. It finds or creates the Analyzer object
-   `<repo>-<service>` (`scripts/exein-object.sh`), then uploads the tarball
+   `<repo>-<service>` (`exein-object` action), then uploads the tarball
    with [`exein-io/analyzer-scan`](https://github.com/exein-io/analyzer-scan).
 3. `deploy` loads the tarballs and runs `balena deploy --draft`. The release
    gets the tags `exein-scan-<service>=<scan-id>` and `exein-gate=pending`.
 
 `exein-gate.yml` runs about every 15 minutes, at :07, :22, :37 and :52
-(`scripts/release-gate.sh`):
+(`release-gate` action):
 
 1. It finds drafts tagged `exein-gate=pending`, oldest first.
 2. If a draft's scans are still running, it stops, so releases finalize in
    build order.
 3. When the scans finish, it downloads each VEX and PDF report and counts
    CVEs at or above `FAIL_ON` (default `critical`). It skips CVEs that Exein
-   marks `not_affected`, `false_positive`, or `resolved`
-   (`scripts/exein-gate.sh`).
+   marks `not_affected`, `false_positive`, or `resolved`.
 4. It attaches the VEX and report files to the release as release assets.
 5. It tags the release with the result:
 
@@ -66,6 +65,26 @@ A balena draft release holds each build until its scans pass. The fleet's
 To gate right away, or to show the override path, run **Actions → Exein
 gate → Run workflow**. Clear `enforce` to finalize failing drafts as
 `override`.
+
+## Layout
+
+The two workflows in this repo are thin callers. The logic is in two reusable
+workflows and five composite actions, so other repos can call them later.
+
+| Path | Role |
+|---|---|
+| `.github/workflows/build-scan-deploy.yml` | Caller: on push to `main` |
+| `.github/workflows/exein-gate.yml` | Caller: schedule and manual run |
+| `.github/workflows/build-scan-draft.yml` | Reusable: build, scan, draft deploy |
+| `.github/workflows/gate.yml` | Reusable: gate and finalize drafts |
+| `.github/actions/setup-balena` | Install the balena CLI and log in |
+| `.github/actions/setup-analyzer` | Install the Analyzer CLI |
+| `.github/actions/list-images` | Map compose services to local image names |
+| `.github/actions/exein-object` | Find or create the Exein object |
+| `.github/actions/release-gate` | Gate drafts (`release-gate.sh`, `exein-fetch.sh`, `exein-gate.sh`) |
+
+Each script sits in the action that runs it, and the action finds it through
+`GITHUB_ACTION_PATH`.
 
 ## Setup
 
