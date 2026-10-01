@@ -3,7 +3,8 @@ name: Exein gate
 # Finalizes draft releases from build-scan-deploy.yml once their Exein scans pass.
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Off the round minutes: GitHub delays or drops scheduled runs at the top of the hour.
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
     inputs:
       enforce:

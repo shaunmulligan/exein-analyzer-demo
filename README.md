@@ -41,7 +41,8 @@ A balena draft release holds each build until its scans pass. The fleet's
 3. `deploy` loads the tarballs and runs `balena deploy --draft`. The release
    gets the tags `exein-scan-<service>=<scan-id>` and `exein-gate=pending`.
 
-`exein-gate.yml` runs every 15 minutes (`scripts/release-gate.sh`):
+`exein-gate.yml` runs about every 15 minutes, at :07, :22, :37 and :52
+(`scripts/release-gate.sh`):
 
 1. It finds drafts tagged `exein-gate=pending`, oldest first.
 2. If a draft's scans are still running, it stops, so releases finalize in
